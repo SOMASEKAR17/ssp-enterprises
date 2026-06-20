@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import toast from 'react-hot-toast';
 import Image from 'next/image';
 import {
@@ -18,14 +19,92 @@ const emptyForm = {
   amenities: [], contactName: '', contactPhone: '', contactEmail: '', isFeatured: false,
 };
 
+function draftKey(userId, propertyId) {
+  // Scoped per logged-in user and per draft target (new listing, or a
+  // specific property being edited) so drafts never leak across accounts
+  // on a shared/public browser, and editing two different properties
+  // doesn't collide.
+  return `ssp-property-draft:${userId || 'anon'}:${propertyId || 'new'}`;
+}
+
 export default function PropertyForm({ initialData, propertyId, basePath, isAdmin }) {
   const router = useRouter();
+  const { data: session } = useSession();
+  const userId = session?.user?.id;
+  const storageKey = draftKey(userId, propertyId);
+
   const [form, setForm] = useState(initialData || emptyForm);
   const [images, setImages] = useState(
     initialData?.images?.map((i) => ({ url: i.url, publicId: i.publicId })) || []
   );
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const hydrated = useRef(false);
+
+  // On mount, offer to restore an unsaved draft for this exact form
+  // (same user + same "new" or "editing this property" target) if one
+  // exists from a previous session that was never submitted or cleared.
+  useEffect(() => {
+    if (hydrated.current || !userId) return;
+    hydrated.current = true;
+
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (!draft || !draft.form) return;
+
+      const hasContent = Object.values(draft.form).some((v) =>
+        Array.isArray(v) ? v.length > 0 : !!v
+      );
+      if (!hasContent && (!draft.images || draft.images.length === 0)) return;
+
+      const restore = window.confirm(
+        'You have an unsaved draft for this listing form. Restore it? (Cancel will discard the draft and start fresh.)'
+      );
+      if (restore) {
+        setForm(draft.form);
+        setImages(draft.images || []);
+        toast.success('Draft restored');
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+    } catch {
+      localStorage.removeItem(storageKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, storageKey]);
+
+  // Persist on every change (debounced) so a refresh/crash/accidental
+  // navigation doesn't lose in-progress work, including already-uploaded
+  // image references.
+  useEffect(() => {
+    if (!userId || !hydrated.current) return;
+    const timeout = setTimeout(() => {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify({ form, images, savedAt: Date.now() }));
+      } catch {
+        // localStorage full or unavailable — fail silently, not critical
+      }
+    }, 400);
+    return () => clearTimeout(timeout);
+  }, [form, images, userId, storageKey]);
+
+  function clearDraft() {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleClearForm() {
+    if (!window.confirm('Clear all entered data for this form? This cannot be undone.')) return;
+    setForm(initialData || emptyForm);
+    setImages(initialData?.images?.map((i) => ({ url: i.url, publicId: i.publicId })) || []);
+    clearDraft();
+    toast.success('Form cleared');
+  }
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -102,6 +181,7 @@ export default function PropertyForm({ initialData, propertyId, basePath, isAdmi
       if (!res.ok) throw new Error(data.error || 'Failed to save property');
 
       toast.success(propertyId ? 'Property updated' : 'Property listed successfully');
+      clearDraft();
       router.push(`${basePath}/properties`);
       router.refresh();
     } catch (err) {
@@ -308,6 +388,9 @@ export default function PropertyForm({ initialData, propertyId, basePath, isAdmi
       </div>
 
       <div className="flex justify-end gap-3">
+        <button type="button" onClick={handleClearForm} className="btn-outline !text-red-600 !ring-red-200 hover:!bg-red-50">
+          Clear Form
+        </button>
         <button type="button" onClick={() => router.back()} className="btn-outline">Cancel</button>
         <button type="submit" disabled={saving || uploading} className="btn-primary">
           {saving ? 'Saving...' : propertyId ? 'Update Property' : 'List Property'}
