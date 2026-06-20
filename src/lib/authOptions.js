@@ -18,6 +18,7 @@ export const authOptions = {
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      allowDangerousEmailAccountLinking: true,
     }),
     CredentialsProvider({
       name: 'Email and Password',
@@ -61,11 +62,14 @@ export const authOptions = {
         if (invite) role = 'OPERATOR';
       }
 
-      // For OAuth (Google), find or create the user record ourselves to
-      // ensure the role is set correctly, since PrismaAdapter creates users
-      // without our custom role logic on first sign in.
+      // For OAuth (Google), find or create/update the user record ourselves to
+      // ensure the role is set correctly. The PrismaAdapter will create a User
+      // row with the schema default (CUSTOMER) on first-ever Google sign-in if
+      // we don't pre-empt it here, which previously caused brand-new operator
+      // invites to silently end up as CUSTOMER.
       if (account?.provider === 'google') {
         const existing = await prisma.user.findUnique({ where: { email } });
+
         if (existing) {
           // Promote role if it should be elevated (e.g. admin email, or newly invited operator)
           if (
@@ -75,6 +79,28 @@ export const authOptions = {
             await prisma.user.update({ where: { email }, data: { role } });
           }
           if (!existing.isActive) return false;
+        } else if (role !== 'CUSTOMER') {
+          // Brand-new Google sign-in for an admin/operator email: create the
+          // user ourselves with the correct role so the adapter's subsequent
+          // upsert just attaches the OAuth account to this row instead of
+          // creating a fresh CUSTOMER-role user.
+          await prisma.user.create({
+            data: {
+              email,
+              name: user.name || null,
+              image: user.image || null,
+              role,
+              emailVerified: new Date(),
+            },
+          });
+        }
+
+        // Mark the invite as accepted now that the operator has signed in
+        if (role === 'OPERATOR') {
+          await prisma.operatorInvite.updateMany({
+            where: { email, accepted: false },
+            data: { accepted: true },
+          });
         }
       }
 
