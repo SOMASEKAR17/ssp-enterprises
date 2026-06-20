@@ -1,0 +1,240 @@
+// Prisma schema for SSP Enterprises Real Estate Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  CUSTOMER
+}
+
+enum PropertyType {
+  FLAT
+  VILLA
+  INDEPENDENT_HOUSE
+  PLOT
+  COMMERCIAL_SHOP
+  COMMERCIAL_OFFICE
+  FARM_HOUSE
+  PENTHOUSE
+  STUDIO_APARTMENT
+  AGRICULTURAL_LAND
+  WAREHOUSE
+  ROW_HOUSE
+}
+
+enum ListingType {
+  SALE
+  RENT
+  LEASE
+}
+
+enum FurnishStatus {
+  FURNISHED
+  SEMI_FURNISHED
+  UNFURNISHED
+}
+
+enum PropertyStatus {
+  ACTIVE
+  SOLD
+  RENTED
+  INACTIVE
+  PENDING_APPROVAL
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  password      String? // hashed, null if OAuth-only
+  phone         String?
+  image         String?
+  role          Role      @default(CUSTOMER)
+  isActive      Boolean   @default(true)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts  Account[]
+  sessions  Session[]
+  properties Property[] @relation("ListedBy")
+  leads     Lead[]
+  invitedBy String?
+
+  @@index([email])
+  @@index([role])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model OperatorInvite {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  invitedBy String
+  createdAt DateTime @default(now())
+  accepted  Boolean  @default(false)
+}
+
+model Property {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  description String   @db.Text
+
+  propertyType  PropertyType
+  listingType   ListingType
+  status        PropertyStatus @default(ACTIVE)
+
+  price        Float
+  priceUnit    String   @default("INR") // INR
+  isNegotiable Boolean  @default(false)
+
+  // Area
+  areaSqft     Float
+  carpetAreaSqft Float?
+
+  // Specs
+  bedrooms      Int?
+  bathrooms     Int?
+  balconies     Int?
+  floorNumber   Int?
+  totalFloors   Int?
+  furnishStatus FurnishStatus?
+  ageOfPropertyYears Int?
+  facing        String?
+
+  // Location
+  addressLine   String
+  locality      String
+  city          String
+  state         String
+  pincode       String
+  country       String   @default("India")
+  latitude      Float?
+  longitude     Float?
+
+  amenities     String[] @default([])
+
+  images        PropertyImage[]
+
+  contactName   String
+  contactPhone  String
+  contactEmail  String?
+
+  isFeatured    Boolean  @default(false)
+  viewCount     Int      @default(0)
+
+  listedById    String
+  listedBy      User     @relation("ListedBy", fields: [listedById], references: [id])
+
+  leads         Lead[]
+  propertyViews PropertyView[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([city])
+  @@index([propertyType])
+  @@index([listingType])
+  @@index([status])
+  @@index([listedById])
+  @@index([slug])
+}
+
+model PropertyImage {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  url        String
+  publicId   String // cloudinary public id, for deletion
+  order      Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+}
+
+model Lead {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+
+  name       String
+  email      String
+  phone      String
+  message    String?  @db.Text
+
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+  @@index([userId])
+}
+
+// Tracks unique-ish visits to individual property pages
+model PropertyView {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  ipHash     String?
+  userAgent  String?
+  referrer   String?
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+  @@index([createdAt])
+}
+
+// Tracks general site visits (for homepage / overall analytics)
+model SiteVisit {
+  id        String   @id @default(cuid())
+  path      String
+  ipHash    String?
+  userAgent String?
+  referrer  String?
+  createdAt DateTime @default(now())
+
+  @@index([path])
+  @@index([createdAt])
+}
